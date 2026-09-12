@@ -2,6 +2,7 @@ package com.faezeh.commerce.order.client;
 
 import com.faezeh.commerce.order.dto.ProductAvailabilityResponse;
 import com.faezeh.commerce.order.exception.ProductNotFoundException;
+import com.faezeh.commerce.order.exception.ProductServiceCommunicationException;
 import com.faezeh.commerce.order.exception.ProductServiceException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,12 +19,25 @@ public class ProductClient {
     private static final Logger LOGGER = LoggerFactory.getLogger(ProductClient.class);
 
     private final RestClient productRestClient;
+    private final ProductAvailabilityResilience productAvailabilityResilience;
 
-    public ProductClient(@Qualifier("productRestClient") RestClient productRestClient) {
+    public ProductClient(
+            @Qualifier("productRestClient") RestClient productRestClient,
+            ProductAvailabilityResilience productAvailabilityResilience
+    ) {
         this.productRestClient = productRestClient;
+        this.productAvailabilityResilience = productAvailabilityResilience;
     }
 
     public ProductAvailabilityResponse getAvailability(Long productId, Integer quantity) {
+        return productAvailabilityResilience.execute(
+                productId,
+                quantity,
+                () -> callProductServiceAvailability(productId, quantity)
+        );
+    }
+
+    private ProductAvailabilityResponse callProductServiceAvailability(Long productId, Integer quantity) {
         LOGGER.info("Checking product availability: productId={}, requestedQuantity={}", productId, quantity);
 
         try {
@@ -45,7 +59,7 @@ public class ProductClient {
                     .onStatus(HttpStatusCode::is5xxServerError, (request, clientResponse) -> {
                         LOGGER.error("Product Service error during availability check: productId={}, status={}",
                                 productId, clientResponse.getStatusCode().value());
-                        throw new ProductServiceException(
+                        throw new ProductServiceCommunicationException(
                                 "Product Service error while validating productId=" + productId);
                     })
                     .body(ProductAvailabilityResponse.class);
@@ -63,8 +77,9 @@ public class ProductClient {
             throw exception;
         } catch (RestClientException exception) {
             LOGGER.error("Product Service unavailable during availability check: productId={}", productId, exception);
-            throw new ProductServiceException(
+            throw new ProductServiceCommunicationException(
                     "Product Service unavailable while validating productId=" + productId, exception);
         }
     }
+
 }

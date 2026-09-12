@@ -9,9 +9,14 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 import com.faezeh.commerce.order.dto.ProductAvailabilityResponse;
 import com.faezeh.commerce.order.exception.ProductNotFoundException;
 import com.faezeh.commerce.order.exception.ProductServiceException;
+import io.github.resilience4j.retry.RetryRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
@@ -23,6 +28,7 @@ import org.springframework.web.client.RestClient;
 class ProductClientTest {
 
     private MockRestServiceServer server;
+    private ExecutorService executorService;
     private ProductClient productClient;
 
     @BeforeEach
@@ -30,7 +36,18 @@ class ProductClientTest {
         RestClient.Builder restClientBuilder = RestClient.builder()
                 .baseUrl("http://product-service");
         server = MockRestServiceServer.bindTo(restClientBuilder).build();
-        productClient = new ProductClient(restClientBuilder.build());
+        executorService = Executors.newVirtualThreadPerTaskExecutor();
+
+        ProductAvailabilityResilience resilience = new ProductAvailabilityResilience(
+                new ProductAvailabilityOperation(executorService),
+                RetryRegistry.ofDefaults()
+        );
+        productClient = new ProductClient(restClientBuilder.build(), resilience);
+    }
+
+    @AfterEach
+    void tearDown() {
+        executorService.shutdownNow();
     }
 
     @Test
