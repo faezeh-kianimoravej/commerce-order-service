@@ -2,6 +2,9 @@ package com.faezeh.commerce.order.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -11,6 +14,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.faezeh.commerce.order.client.ProductClient;
+import com.faezeh.commerce.order.dto.ProductAvailabilityResponse;
 import com.faezeh.commerce.order.entity.Order;
 import com.faezeh.commerce.order.entity.OrderStatus;
 import com.faezeh.commerce.order.repository.OrderRepository;
@@ -20,6 +25,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest(properties = {
@@ -41,10 +47,16 @@ class OrderIntegrationTest {
     @Autowired
     private OrderRepository orderRepository;
 
+    @MockitoBean
+    private ProductClient productClient;
+
     @BeforeEach
     void cleanDatabase() {
         orderRepository.deleteAll();
         orderRepository.flush();
+        when(productClient.getAvailability(anyLong(), anyInt()))
+                .thenAnswer(invocation -> new ProductAvailabilityResponse(
+                        invocation.getArgument(0), true, true, 100));
     }
 
     @Test

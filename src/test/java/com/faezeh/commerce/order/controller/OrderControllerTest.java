@@ -20,6 +20,9 @@ import com.faezeh.commerce.order.dto.OrderItemResponse;
 import com.faezeh.commerce.order.dto.OrderResponse;
 import com.faezeh.commerce.order.entity.OrderStatus;
 import com.faezeh.commerce.order.exception.OrderNotFoundException;
+import com.faezeh.commerce.order.exception.ProductNotFoundException;
+import com.faezeh.commerce.order.exception.ProductServiceException;
+import com.faezeh.commerce.order.exception.ProductUnavailableException;
 import com.faezeh.commerce.order.service.OrderService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -99,6 +102,47 @@ class OrderControllerTest {
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.fieldErrors.items").exists());
+    }
+
+    @Test
+    void createOrderWithMissingOrInactiveProductReturnsNotFound() throws Exception {
+        when(orderService.createOrder(any())).thenThrow(new ProductNotFoundException(1L));
+
+        mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validCreateOrderJson()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.message").value("Product not found or inactive: productId=1"))
+                .andExpect(jsonPath("$.path").value("/api/orders"));
+    }
+
+    @Test
+    void createOrderWithInsufficientStockReturnsConflict() throws Exception {
+        when(orderService.createOrder(any())).thenThrow(new ProductUnavailableException(1L, 2, 1));
+
+        mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validCreateOrderJson()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.message").value(
+                        "Insufficient product quantity: productId=1, requestedQuantity=2, availableQuantity=1"))
+                .andExpect(jsonPath("$.path").value("/api/orders"));
+    }
+
+    @Test
+    void createOrderWithProductServiceErrorReturnsServiceUnavailable() throws Exception {
+        when(orderService.createOrder(any()))
+                .thenThrow(new ProductServiceException("Product Service error while validating productId=1"));
+
+        mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validCreateOrderJson()))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.status").value(503))
+                .andExpect(jsonPath("$.message").value("Product Service error while validating productId=1"))
+                .andExpect(jsonPath("$.path").value("/api/orders"));
     }
 
     @Test

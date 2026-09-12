@@ -10,6 +10,10 @@ spring:
       ddl-auto: update
     open-in-view: false
 
+product:
+  service:
+    url: ${PRODUCT_SERVICE_URL:http://localhost:8081}
+
 management:
   endpoint:
     health:

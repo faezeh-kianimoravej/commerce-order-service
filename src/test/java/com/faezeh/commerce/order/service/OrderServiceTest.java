@@ -13,14 +13,19 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import com.faezeh.commerce.order.client.ProductClient;
 import com.faezeh.commerce.order.dto.CreateOrderItemRequest;
 import com.faezeh.commerce.order.dto.CreateOrderRequest;
 import com.faezeh.commerce.order.dto.OrderResponse;
+import com.faezeh.commerce.order.dto.ProductAvailabilityResponse;
 import com.faezeh.commerce.order.dto.UpdateOrderStatusRequest;
 import com.faezeh.commerce.order.entity.Order;
 import com.faezeh.commerce.order.entity.OrderItem;
 import com.faezeh.commerce.order.entity.OrderStatus;
 import com.faezeh.commerce.order.exception.OrderNotFoundException;
+import com.faezeh.commerce.order.exception.ProductNotFoundException;
+import com.faezeh.commerce.order.exception.ProductServiceException;
+import com.faezeh.commerce.order.exception.ProductUnavailableException;
 import com.faezeh.commerce.order.metrics.OrderMetrics;
 import com.faezeh.commerce.order.repository.OrderRepository;
 import org.junit.jupiter.api.Test;
@@ -38,12 +43,16 @@ class OrderServiceTest {
     @Mock
     private OrderMetrics orderMetrics;
 
+    @Mock
+    private ProductClient productClient;
+
     @InjectMocks
     private OrderService orderService;
 
     @Test
     void createOrderCalculatesTotalsGeneratesOrderNumberAndReturnsCreatedOrder() {
         CreateOrderRequest request = createOrderRequest();
+        mockAvailableProducts(request);
         when(orderRepository.existsByOrderNumber(any())).thenReturn(false);
         when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
             Order order = invocation.getArgument(0);
@@ -66,15 +75,19 @@ class OrderServiceTest {
         assertThat(response.items()).hasSize(2);
         assertThat(response.items().get(0).lineTotal()).isEqualByComparingTo("59.98");
         assertThat(response.items().get(1).lineTotal()).isEqualByComparingTo("9.99");
+        verify(productClient).getAvailability(1L, 2);
+        verify(productClient).getAvailability(2L, 1);
         verify(orderMetrics).orderCreated();
     }
 
     @Test
     void createOrderRetriesGeneratedOrderNumberWhenCollisionOccurs() {
+        CreateOrderRequest request = createOrderRequest();
+        mockAvailableProducts(request);
         when(orderRepository.existsByOrderNumber(any())).thenReturn(true, false);
         when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        orderService.createOrder(createOrderRequest());
+        orderService.createOrder(request);
 
         verify(orderRepository).save(any(Order.class));
         verify(orderMetrics).orderCreated();
@@ -82,12 +95,54 @@ class OrderServiceTest {
 
     @Test
     void createOrderDoesNotIncrementCounterWhenSaveFails() {
+        CreateOrderRequest request = createOrderRequest();
+        mockAvailableProducts(request);
         when(orderRepository.existsByOrderNumber(any())).thenReturn(false);
         when(orderRepository.save(any(Order.class))).thenThrow(new IllegalStateException("database unavailable"));
 
-        assertThatThrownBy(() -> orderService.createOrder(createOrderRequest()))
+        assertThatThrownBy(() -> orderService.createOrder(request))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("database unavailable");
+        verify(orderMetrics, never()).orderCreated();
+    }
+
+    @Test
+    void createOrderRejectsMissingOrInactiveProduct() {
+        CreateOrderRequest request = createOrderRequest();
+        when(productClient.getAvailability(1L, 2))
+                .thenReturn(new ProductAvailabilityResponse(1L, false, true, 25));
+
+        assertThatThrownBy(() -> orderService.createOrder(request))
+                .isInstanceOf(ProductNotFoundException.class)
+                .hasMessageContaining("productId=1");
+        verify(orderRepository, never()).save(any(Order.class));
+        verify(orderMetrics, never()).orderCreated();
+    }
+
+    @Test
+    void createOrderRejectsInsufficientStock() {
+        CreateOrderRequest request = createOrderRequest();
+        when(productClient.getAvailability(1L, 2))
+                .thenReturn(new ProductAvailabilityResponse(1L, true, false, 1));
+
+        assertThatThrownBy(() -> orderService.createOrder(request))
+                .isInstanceOf(ProductUnavailableException.class)
+                .hasMessageContaining("requestedQuantity=2")
+                .hasMessageContaining("availableQuantity=1");
+        verify(orderRepository, never()).save(any(Order.class));
+        verify(orderMetrics, never()).orderCreated();
+    }
+
+    @Test
+    void createOrderPropagatesProductServiceErrorWithoutSavingOrder() {
+        CreateOrderRequest request = createOrderRequest();
+        when(productClient.getAvailability(1L, 2))
+                .thenThrow(new ProductServiceException("Product Service unavailable while validating productId=1"));
+
+        assertThatThrownBy(() -> orderService.createOrder(request))
+                .isInstanceOf(ProductServiceException.class)
+                .hasMessageContaining("Product Service unavailable");
+        verify(orderRepository, never()).save(any(Order.class));
         verify(orderMetrics, never()).orderCreated();
     }
 
@@ -231,6 +286,13 @@ class OrderServiceTest {
                 new CreateOrderItemRequest(1L, "TSHIRT-BLACK-L", 2, new BigDecimal("29.99")),
                 new CreateOrderItemRequest(2L, "SOCKS-WHITE", 1, new BigDecimal("9.99"))
         ));
+    }
+
+    private void mockAvailableProducts(CreateOrderRequest request) {
+        for (CreateOrderItemRequest item : request.items()) {
+            when(productClient.getAvailability(item.productId(), item.quantity()))
+                    .thenReturn(new ProductAvailabilityResponse(item.productId(), true, true, 25));
+        }
     }
 
     private Order order() {
